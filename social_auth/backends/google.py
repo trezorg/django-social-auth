@@ -18,12 +18,16 @@ logger = logging.getLogger(__name__)
 
 from urllib import urlencode
 from urllib2 import Request, urlopen
+from urlparse import urlsplit
 
 from django.conf import settings
 from django.utils import simplejson
+from django.contrib.auth import authenticate
 
 from social_auth.backends import OpenIdAuth, ConsumerBasedOAuth, BaseOAuth2, \
-                                 OAuthBackend, OpenIDBackend, USERNAME
+                                 OAuthBackend, OpenIDBackend, SocialAuthBackend, USERNAME
+from openid.yadis import etxrd
+
 
 
 # Google OAuth base configuration
@@ -43,7 +47,7 @@ GOOGLEAPIS_EMAIL = 'https://www.googleapis.com/userinfo/email'
 GOOGLE_OPENID_URL = 'https://www.google.com/accounts/o8/id'
 
 EXPIRES_NAME = getattr(settings, 'SOCIAL_AUTH_EXPIRATION', 'expires')
-
+LOGIN_ERROR_URL = getattr(settings, 'LOGIN_ERROR_URL', settings.LOGIN_URL)
 
 # Backends
 class GoogleOAuthBackend(OAuthBackend):
@@ -192,9 +196,93 @@ def googleapis_email(url, params):
         return None
 
 
+class GoogleAppsBackend(SocialAuthBackend):
+    name = 'google-apps'
+    
+    def get_user_id(self, details, response):
+        """ Returns claimed_id. """
+        return details['uid']
+
+    def get_user_details(self, response):
+        details = {'uid': response['openid.claimed_id'],
+                   'email': response.get('openid.ext1.value.email', None),
+                   'first_name': response.get('openid.ext1.value.firstname', None),
+                   'last_name': response.get('openid.ext1.value.lastname', None)}
+        if details['email']:
+            details[USERNAME] = details['email'].replace('.', '').replace('@', '')[:27]
+        return details
+
+class GoogleAppsAuth(OpenIdAuth):
+    """ Google App Market Place OpenID authentication. """
+    AUTH_BACKEND = GoogleAppsBackend
+    ENDPOINT_URL = 'https://www.google.com/accounts/o8/site-xrds'
+    OPENID_ENDPOINT_TYPE = 'http://specs.openid.net/auth/2.0/server'
+
+    def openid_url(self, **kwargs):
+        """ Does XRD discovery and returns OpenID URL. """
+        kwargs['hd'] = self.domain_name
+        url = self.ENDPOINT_URL + '?' + urlencode(kwargs)
+        response = urlopen(url)
+        data = response.read()
+        if response.code == 200:
+            xrd = etxrd.parseXRDS(data)
+            for service in etxrd.iterServices(xrd):
+                if self.OPENID_ENDPOINT_TYPE in etxrd.getTypeURIs(service):
+                    return etxrd.sortedURIs(service)[0]
+        return LOGIN_ERROR_URL
+
+    def auth_url(self):
+        """ Returns OpenID url with extra parameters. LOGIN_ERROR_URL on case of error. """
+        extra_params = self.auth_extra_arguments()
+        try:
+            openid_url = self.openid_url()
+            if extra_params:
+                query = urlsplit(openid_url).query
+                openid_url += (query and '&' or '?') + urlencode(extra_params)
+        except:
+            logger.exception('discovery error.')
+            openid_url = LOGIN_ERROR_URL
+        return openid_url
+
+    def auth_complete(self, *args, **kwargs):
+        """ 
+        Calls backend's authenticate method with 'response' argument, 
+        initialized by request.GET parameters from Google. """
+        kwargs.update({'response': kwargs['request'].GET, self.AUTH_BACKEND.name: True})
+        return authenticate(*args, **kwargs)
+        
+    @property
+    def uses_redirect(self):
+        """ Yes, we're redirecting to Google. """
+        return True
+
+    def auth_extra_arguments(self):
+        """ Additional parameters required for Google Apps openid discovery. """
+        return {
+            'openid.ns': 'http://specs.openid.net/auth/2.0',
+            'openid.return_to': self.request.build_absolute_uri(self.redirect),
+            'openid.mode': 'checkid_setup', 
+            'openid.claimed_id': 'http://specs.openid.net/auth/2.0/identifier_select',
+            'openid.identity': 'http://specs.openid.net/auth/2.0/identifier_select',
+            'openid.realm': self.request.build_absolute_uri('/'),
+            'openid.ns.ax': 'http://openid.net/srv/ax/1.0',
+            'openid.ax.mode': 'fetch_request',
+            'openid.ax.required': 'firstname,lastname,language,email',
+            'openid.ax.type.email': 'http://axschema.org/contact/email',
+            'openid.ax.type.firstname': 'http://axschema.org/namePerson/first',
+            'openid.ax.type.language': 'http://axschema.org/pref/language',
+            'openid.ax.type.lastname': 'http://axschema.org/namePerson/last',
+            'openid.ns.oauth': 'http://specs.openid.net/extensions/oauth/1.0',
+            'openid.ext2.consumer': getattr(settings, 'GOOGLE_CONSUMER_KEY', self.domain_name),
+            'openid.ns.pape': 'http://specs.openid.net/extensions/pape/1.0',
+            'openid.ns.ui': 'http://openid.net/srv/ax/1.0',
+            'openid.ns.ext2': 'http://specs.openid.net/extensions/oauth/1.0',
+            }
+
 # Backend definition
 BACKENDS = {
     'google': GoogleAuth,
     'google-oauth': GoogleOAuth,
     'google-oauth2': GoogleOAuth2,
+    'google-apps': GoogleAppsAuth
 }

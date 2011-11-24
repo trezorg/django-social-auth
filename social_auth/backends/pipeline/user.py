@@ -20,6 +20,7 @@ def get_username(details, user=None, *args, **kwargs):
     warn_setting('SOCIAL_AUTH_DEFAULT_USERNAME', 'get_username')
     warn_setting('SOCIAL_AUTH_UUID_LENGTH', 'get_username')
     warn_setting('SOCIAL_AUTH_USERNAME_FIXER', 'get_username')
+    warn_setting('SOCIAL_AUTH_USERNAME_STRICT', 'get_username')
 
     if getattr(settings, 'SOCIAL_AUTH_FORCE_RANDOM_USERNAME', False):
         username = uuid4().get_hex()
@@ -29,8 +30,10 @@ def get_username(details, user=None, *args, **kwargs):
         username = settings.SOCIAL_AUTH_DEFAULT_USERNAME
         if callable(username):
             username = username()
-    else:
+    elif hasattr(settings, 'SOCIAL_AUTH_USERNAME_STRICT', False):
         username = uuid4().get_hex()
+    else:
+        raise ValueError('Invalid username.')
 
     uuid_lenght = getattr(settings, 'SOCIAL_AUTH_UUID_LENGTH', 16)
     username_fixer = getattr(settings, 'SOCIAL_AUTH_USERNAME_FIXER',
