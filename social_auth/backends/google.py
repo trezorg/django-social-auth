@@ -215,7 +215,7 @@ class GoogleAppsBackend(SocialAuthBackend):
 class GoogleAppsAuth(OpenIdAuth):
     """ Google App Market Place OpenID authentication. """
     AUTH_BACKEND = GoogleAppsBackend
-    ENDPOINT_URL = 'https://www.google.com/accounts/o8/site-xrds'
+    ENDPOINT_URL = 'https://www.google.com/accounts/o8/id'
     OPENID_ENDPOINT_TYPE = 'http://specs.openid.net/auth/2.0/server'
 
     def openid_url(self, **kwargs):
